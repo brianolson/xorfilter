@@ -1,4 +1,4 @@
-module github.com/FastFilter/xorfilter
+module github.com/brianolson/xorfilter
 
 go 1.13
 
