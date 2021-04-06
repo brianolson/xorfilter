@@ -109,11 +109,51 @@ func resetSets(setsi []xorset) []xorset {
 // The maximum  number of iterations allowed before the populate function returns an error
 var MaxIterations = 100
 
+// Builder holds allocated structures so that repeated filter construction can have a lower garbage collection overhead
+type Builder struct {
+	stack []keyindex
+	Q0    []keyindex
+	Q1    []keyindex
+	Q2    []keyindex
+	sets0 []xorset
+	sets1 []xorset
+	sets2 []xorset
+}
+
+func ensureKeyindexes(v []keyindex, n int) []keyindex {
+	if cap(v) < n {
+		return make([]keyindex, n)
+	}
+	// zero out prior data
+	for i := 0; i < n; i++ {
+		v[i].hash = 0
+		v[i].index = 0
+	}
+	return v
+}
+
+func ensureXorset(v []xorset, n int) []xorset {
+	if cap(v) < n {
+		return make([]xorset, n)
+	}
+	// zero out prior data
+	for i := 0; i < n; i++ {
+		v[i].xormask = 0
+		v[i].count = 0
+	}
+	return v
+}
+
+func Populate(keys []uint64) (*Xor8, error) {
+	var bld Builder
+	return bld.Populate(keys)
+}
+
 // Populate fills the filter with provided keys.
 // The caller is responsible to ensure that there are no duplicate keys.
 // The function may return an error after too many iterations: it is almost
 // surely an indication that you have duplicate keys.
-func Populate(keys []uint64) (*Xor8, error) {
+func (bld *Builder) Populate(keys []uint64) (*Xor8, error) {
 	size := len(keys)
 	capacity := 32 + uint32(math.Ceil(1.23*float64(size)))
 	capacity = capacity / 3 * 3 // round it down to a multiple of 3
@@ -126,13 +166,20 @@ func Populate(keys []uint64) (*Xor8, error) {
 	// slice capacity defaults to length
 	filter.Fingerprints = make([]uint8, capacity)
 
-	stack := make([]keyindex, size)
-	Q0 := make([]keyindex, filter.BlockLength)
-	Q1 := make([]keyindex, filter.BlockLength)
-	Q2 := make([]keyindex, filter.BlockLength)
-	sets0 := make([]xorset, filter.BlockLength)
-	sets1 := make([]xorset, filter.BlockLength)
-	sets2 := make([]xorset, filter.BlockLength)
+	bld.stack = ensureKeyindexes(bld.stack, size)
+	bld.Q0 = ensureKeyindexes(bld.Q0, int(filter.BlockLength))
+	bld.Q1 = ensureKeyindexes(bld.Q1, int(filter.BlockLength))
+	bld.Q2 = ensureKeyindexes(bld.Q2, int(filter.BlockLength))
+	bld.sets0 = ensureXorset(bld.sets0, int(filter.BlockLength))
+	bld.sets1 = ensureXorset(bld.sets1, int(filter.BlockLength))
+	bld.sets2 = ensureXorset(bld.sets2, int(filter.BlockLength))
+	stack := bld.stack[:size]
+	Q0 := bld.Q0[:filter.BlockLength]
+	Q1 := bld.Q1[:filter.BlockLength]
+	Q2 := bld.Q2[:filter.BlockLength]
+	sets0 := bld.sets0[:filter.BlockLength]
+	sets1 := bld.sets1[:filter.BlockLength]
+	sets2 := bld.sets2[:filter.BlockLength]
 	iterations := 0
 
 	for {
