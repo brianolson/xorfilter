@@ -124,12 +124,22 @@ func ensureKeyindexes(v []keyindex, n int) []keyindex {
 	if cap(v) < n {
 		return make([]keyindex, n)
 	}
+	// zero out prior data
+	for i := 0; i < n; i++ {
+		v[i].hash = 0
+		v[i].index = 0
+	}
 	return v
 }
 
 func ensureXorset(v []xorset, n int) []xorset {
 	if cap(v) < n {
 		return make([]xorset, n)
+	}
+	// zero out prior data
+	for i := 0; i < n; i++ {
+		v[i].xormask = 0
+		v[i].count = 0
 	}
 	return v
 }

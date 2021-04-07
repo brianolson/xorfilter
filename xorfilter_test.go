@@ -3,6 +3,7 @@ package xorfilter
 import (
 	"fmt"
 	"math/rand"
+	"runtime/debug"
 	"testing"
 	"time"
 
@@ -45,6 +46,81 @@ func TestBasic(t *testing.T) {
 		for _, v := range keys {
 			assert.Equal(t, true, filter.Contains(v))
 		}
+	}
+}
+
+func TestOne(t *testing.T) {
+	testsize := 1
+	keys := make([]uint64, testsize)
+	for i := range keys {
+		keys[i] = 12043587783372603620 //splitmix64(&rng)
+	}
+	filter, err := Populate(keys)
+	assert.NoError(t, err)
+	for _, v := range keys {
+		assert.Equal(t, true, filter.Contains(v))
+	}
+}
+
+func TestManyOne(t *testing.T) {
+	var g int
+	var keys []uint64
+	defer func() {
+		x := recover()
+		if x != nil {
+			t.Logf("panic @%d with key %d %x : %v %s", g, keys[0], keys[0], x, debug.Stack())
+			panic(x)
+		}
+	}()
+	testsize := 1
+	for g = 0; g < 1000000; g++ {
+		keys = make([]uint64, testsize)
+		for i := range keys {
+			keys[i] = splitmix64(&rng)
+		}
+		filter, err := Populate(keys)
+		assert.NoError(t, err)
+		for _, v := range keys {
+			assert.Equal(t, true, filter.Contains(v))
+		}
+	}
+}
+
+func TestManyOneBuilder(t *testing.T) {
+	var g int
+	var keys []uint64
+	defer func() {
+		x := recover()
+		if x != nil {
+			t.Logf("panic @%d with key %d %x : %v %s", g, keys[0], keys[0], x, debug.Stack())
+			panic(x)
+		}
+	}()
+	testsize := 1
+	var b Builder
+	for g = 0; g < 1000000; g++ {
+		keys = make([]uint64, testsize)
+		for i := range keys {
+			keys[i] = splitmix64(&rng)
+		}
+		filter, err := b.Populate(keys)
+		assert.NoError(t, err)
+		for _, v := range keys {
+			assert.Equal(t, true, filter.Contains(v))
+		}
+	}
+}
+
+func TestZero(t *testing.T) {
+	testsize := 0
+	keys := make([]uint64, testsize)
+	for i := range keys {
+		keys[i] = splitmix64(&rng)
+	}
+	filter, err := Populate(keys)
+	assert.NoError(t, err)
+	for _, v := range keys {
+		assert.Equal(t, true, filter.Contains(v))
 	}
 }
 
