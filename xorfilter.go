@@ -53,7 +53,7 @@ func (filter *Xor8) Contains(key uint64) bool {
 	return f == (filter.Fingerprints[h0] ^ filter.Fingerprints[h1] ^ filter.Fingerprints[h2])
 }
 
-func (filter *Xor8) geth0h1h2(k uint64) hashes {
+func (filter *XorFilterCommon) geth0h1h2(k uint64) hashes {
 	hash := mixsplit(k, filter.Seed)
 	answer := hashes{}
 	answer.h = hash
@@ -67,17 +67,17 @@ func (filter *Xor8) geth0h1h2(k uint64) hashes {
 	return answer
 }
 
-func (filter *Xor8) geth0(hash uint64) uint32 {
+func (filter *XorFilterCommon) geth0(hash uint64) uint32 {
 	r0 := uint32(hash)
 	return reduce(r0, filter.BlockLength)
 }
 
-func (filter *Xor8) geth1(hash uint64) uint32 {
+func (filter *XorFilterCommon) geth1(hash uint64) uint32 {
 	r1 := uint32(rotl64(hash, 21))
 	return reduce(r1, filter.BlockLength)
 }
 
-func (filter *Xor8) geth2(hash uint64) uint32 {
+func (filter *XorFilterCommon) geth2(hash uint64) uint32 {
 	r2 := uint32(rotl64(hash, 42))
 	return reduce(r2, filter.BlockLength)
 }
@@ -111,13 +111,10 @@ var MaxIterations = 100
 
 // Builder holds allocated structures so that repeated filter construction can have a lower garbage collection overhead
 type Builder struct {
-	stack []keyindex
-	Q0    []keyindex
-	Q1    []keyindex
-	Q2    []keyindex
-	sets0 []xorset
-	sets1 []xorset
-	sets2 []xorset
+	kiStore  []keyindex
+	setStore []xorset
+
+	rngcounter uint64
 }
 
 func ensureKeyindexes(v []keyindex, n int) []keyindex {
@@ -144,6 +141,46 @@ func ensureXorset(v []xorset, n int) []xorset {
 	return v
 }
 
+func (bld *Builder) getKeyIndexes(size, blockLength int) (stack, q0, q1, q2 []keyindex) {
+	tot := size + (blockLength * 3)
+	if len(bld.kiStore) < tot {
+		bld.kiStore = make([]keyindex, tot)
+	} else {
+		// zero out old storage (make() zeroes new storage)
+		for i := 0; i < tot; i++ {
+			bld.kiStore[i].hash = 0
+			bld.kiStore[i].index = 0
+		}
+	}
+	stack = bld.kiStore[:size]
+	pos := size
+	q0 = bld.kiStore[pos : pos+blockLength]
+	pos += blockLength
+	q1 = bld.kiStore[pos : pos+blockLength]
+	pos += blockLength
+	q2 = bld.kiStore[pos : pos+blockLength]
+	return
+}
+
+func (bld *Builder) getSets(blockLength int) (sets0, sets1, sets2 []xorset) {
+	tot := blockLength * 3
+	if len(bld.setStore) < tot {
+		bld.setStore = make([]xorset, tot)
+	} else {
+		// zero out prior storage
+		for i := 0; i < tot; i++ {
+			bld.setStore[i].xormask = 0
+			bld.setStore[i].count = 0
+		}
+	}
+	sets0 = bld.setStore[:blockLength]
+	pos := blockLength
+	sets1 = bld.setStore[pos : pos+blockLength]
+	pos += blockLength
+	sets2 = bld.setStore[pos : pos+blockLength]
+	return
+}
+
 func Populate(keys []uint64) (*Xor8, error) {
 	var bld Builder
 	return bld.Populate(keys)
@@ -159,27 +196,42 @@ func (bld *Builder) Populate(keys []uint64) (*Xor8, error) {
 	capacity = capacity / 3 * 3 // round it down to a multiple of 3
 
 	filter := &Xor8{}
-	var rngcounter uint64 = 1
-	filter.Seed = splitmix64(&rngcounter)
-	filter.BlockLength = capacity / 3
-
 	// slice capacity defaults to length
 	filter.Fingerprints = make([]uint8, capacity)
+	filter.BlockLength = capacity / 3
 
-	bld.stack = ensureKeyindexes(bld.stack, size)
-	bld.Q0 = ensureKeyindexes(bld.Q0, int(filter.BlockLength))
-	bld.Q1 = ensureKeyindexes(bld.Q1, int(filter.BlockLength))
-	bld.Q2 = ensureKeyindexes(bld.Q2, int(filter.BlockLength))
-	bld.sets0 = ensureXorset(bld.sets0, int(filter.BlockLength))
-	bld.sets1 = ensureXorset(bld.sets1, int(filter.BlockLength))
-	bld.sets2 = ensureXorset(bld.sets2, int(filter.BlockLength))
-	stack := bld.stack[:size]
-	Q0 := bld.Q0[:filter.BlockLength]
-	Q1 := bld.Q1[:filter.BlockLength]
-	Q2 := bld.Q2[:filter.BlockLength]
-	sets0 := bld.sets0[:filter.BlockLength]
-	sets1 := bld.sets1[:filter.BlockLength]
-	sets2 := bld.sets2[:filter.BlockLength]
+	stack, err := bld.populateCommon(keys, &filter.XorFilterCommon)
+	if err != nil {
+		return nil, err
+	}
+
+	stacksize := size
+	for stacksize > 0 {
+		stacksize--
+		ki := stack[stacksize]
+		val := uint8(fingerprint(ki.hash))
+		if ki.index < filter.BlockLength {
+			val ^= filter.Fingerprints[filter.geth1(ki.hash)+filter.BlockLength] ^ filter.Fingerprints[filter.geth2(ki.hash)+2*filter.BlockLength]
+		} else if ki.index < 2*filter.BlockLength {
+			val ^= filter.Fingerprints[filter.geth0(ki.hash)] ^ filter.Fingerprints[filter.geth2(ki.hash)+2*filter.BlockLength]
+		} else {
+			val ^= filter.Fingerprints[filter.geth0(ki.hash)] ^ filter.Fingerprints[filter.geth1(ki.hash)+filter.BlockLength]
+		}
+		filter.Fingerprints[ki.index] = val
+	}
+
+	return filter, nil
+}
+
+func (bld *Builder) populateCommon(keys []uint64, filter *XorFilterCommon) (stack []keyindex, err error) {
+	size := len(keys)
+	if bld.rngcounter == 0 {
+		bld.rngcounter = 1
+	}
+	filter.Seed = splitmix64(&bld.rngcounter)
+
+	stack, Q0, Q1, Q2 := bld.getKeyIndexes(size, int(filter.BlockLength))
+	sets0, sets1, sets2 := bld.getSets(int(filter.BlockLength))
 	iterations := 0
 
 	for {
@@ -303,22 +355,7 @@ func (bld *Builder) Populate(keys []uint64) (*Xor8, error) {
 		sets1 = resetSets(sets1)
 		sets2 = resetSets(sets2)
 
-		filter.Seed = splitmix64(&rngcounter)
+		filter.Seed = splitmix64(&bld.rngcounter)
 	}
-
-	stacksize := size
-	for stacksize > 0 {
-		stacksize--
-		ki := stack[stacksize]
-		val := uint8(fingerprint(ki.hash))
-		if ki.index < filter.BlockLength {
-			val ^= filter.Fingerprints[filter.geth1(ki.hash)+filter.BlockLength] ^ filter.Fingerprints[filter.geth2(ki.hash)+2*filter.BlockLength]
-		} else if ki.index < 2*filter.BlockLength {
-			val ^= filter.Fingerprints[filter.geth0(ki.hash)] ^ filter.Fingerprints[filter.geth2(ki.hash)+2*filter.BlockLength]
-		} else {
-			val ^= filter.Fingerprints[filter.geth0(ki.hash)] ^ filter.Fingerprints[filter.geth1(ki.hash)+filter.BlockLength]
-		}
-		filter.Fingerprints[ki.index] = val
-	}
-	return filter, nil
+	return stack, nil
 }

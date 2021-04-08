@@ -12,41 +12,12 @@ import (
 
 var rng = uint64(time.Now().UnixNano())
 
-func TestBasic(t *testing.T) {
-	testsize := 10000
-	keys := make([]uint64, testsize)
-	for i := range keys {
-		keys[i] = splitmix64(&rng)
+func TestBasic8(t *testing.T) {
+	var bld Builder
+	testPopulateN := func(keys []uint64, bits int) (Filter, error) {
+		return bld.Populate(keys)
 	}
-	filter, _ := Populate(keys)
-	for _, v := range keys {
-		assert.Equal(t, true, filter.Contains(v))
-	}
-	falsesize := 1000000
-	matches := 0
-	bpv := float64(len(filter.Fingerprints)) * 8.0 / float64(testsize)
-	fmt.Println("Xor8 filter:")
-	fmt.Println("bits per entry ", bpv)
-	assert.Equal(t, true, bpv < 10.)
-	for i := 0; i < falsesize; i++ {
-		v := splitmix64(&rng)
-		if filter.Contains(v) {
-			matches++
-		}
-	}
-	fpp := float64(matches) * 100.0 / float64(falsesize)
-	fmt.Println("false positive rate ", fpp)
-	assert.Equal(t, true, fpp < 0.40)
-	keys = keys[:1000]
-	for trial := 0; trial < 10; trial++ {
-		for i := range keys {
-			keys[i] = splitmix64(&rng)
-		}
-		filter, _ = Populate(keys)
-		for _, v := range keys {
-			assert.Equal(t, true, filter.Contains(v))
-		}
-	}
+	_testBasicN(t, 8, testPopulateN)
 }
 
 func TestOne(t *testing.T) {
@@ -124,7 +95,13 @@ func TestZero(t *testing.T) {
 	}
 }
 
-func BenchmarkPopulate100000(b *testing.B) {
+func BenchmarkPopulate10000(b *testing.B) {
+	innerBenchmarkPopulate10000(b, func(keys []uint64) (Filter, error) {
+		return Populate(keys)
+	})
+}
+
+func XBenchmarkPopulate10000(b *testing.B) {
 	testsize := 10000
 	keys := make([]uint64, testsize)
 
@@ -140,6 +117,29 @@ func BenchmarkPopulate100000(b *testing.B) {
 	}
 }
 
+func BenchmarkPopulate10000Builder(b *testing.B) {
+	var bu Builder
+	innerBenchmarkPopulate10000(b, func(keys []uint64) (Filter, error) {
+		return bu.Populate(keys)
+	})
+}
+
+func innerBenchmarkPopulate10000(b *testing.B, populatef func([]uint64) (Filter, error)) {
+	testsize := 10000
+	keys := make([]uint64, testsize)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		b.StopTimer()
+		for i := range keys {
+			keys[i] = splitmix64(&rng)
+		}
+		b.StartTimer()
+		populatef(keys)
+	}
+}
+
 // credit: el10savio
 func Test_DuplicateKeys(t *testing.T) {
 	keys := []uint64{1, 77, 31, 241, 303, 303}
@@ -150,13 +150,19 @@ func Test_DuplicateKeys(t *testing.T) {
 	}
 }
 
-func BenchmarkContains100000(b *testing.B) {
+func BenchmarkContains10000(b *testing.B) {
+	innerBenchmarkContains10000(b, func(keys []uint64) (Filter, error) {
+		return Populate(keys)
+	})
+}
+
+func innerBenchmarkContains10000(b *testing.B, populatef func([]uint64) (Filter, error)) {
 	testsize := 10000
 	keys := make([]uint64, testsize)
 	for i := range keys {
 		keys[i] = splitmix64(&rng)
 	}
-	filter, _ := Populate(keys)
+	filter, _ := populatef(keys)
 
 	b.ReportAllocs()
 	b.ResetTimer()

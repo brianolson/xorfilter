@@ -2,9 +2,13 @@ package xorfilter
 
 // Xor8 offers a 0.3% false-positive probability
 type Xor8 struct {
-	Seed         uint64
-	BlockLength  uint32
+	XorFilterCommon
 	Fingerprints []uint8
+}
+
+type XorFilterCommon struct {
+	Seed        uint64
+	BlockLength uint32
 }
 
 type xorset struct {
@@ -22,4 +26,8 @@ type hashes struct {
 type keyindex struct {
 	hash  uint64
 	index uint32
+}
+
+type Filter interface {
+	Contains(key uint64) bool
 }
