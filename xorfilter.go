@@ -5,6 +5,9 @@ import (
 	"math"
 )
 
+// ErrTooManyIterations returned by populateCommon if the methos is unable to populate the stack within the iterations limit.
+var ErrTooManyIterations = errors.New("too many iterations, you probably have duplicate keys")
+
 func murmur64(h uint64) uint64 {
 	h ^= h >> 33
 	h *= 0xff51afd7ed558ccd
@@ -87,14 +90,13 @@ func scanCount(Qi []keyindex, setsi []xorset) ([]keyindex, int) {
 	QiSize := 0
 
 	// len(setsi) = filter.BlockLength
-	for i := uint32(0); i < uint32(len(setsi)); i++ {
-		if setsi[i].count == 1 {
-			Qi[QiSize].index = i
-			Qi[QiSize].hash = setsi[i].xormask
+	for i, s := range setsi {
+		if s.count == 1 {
+			Qi[QiSize].index = uint32(i)
+			Qi[QiSize].hash = s.xormask
 			QiSize++
 		}
 	}
-
 	return Qi, QiSize
 }
 
@@ -148,8 +150,7 @@ func (bld *Builder) getKeyIndexes(size, blockLength int) (stack, q0, q1, q2 []ke
 	} else {
 		// zero out old storage (make() zeroes new storage)
 		for i := 0; i < tot; i++ {
-			bld.kiStore[i].hash = 0
-			bld.kiStore[i].index = 0
+			bld.kiStore[i] = keyindex{}
 		}
 	}
 	stack = bld.kiStore[:size]
@@ -169,8 +170,7 @@ func (bld *Builder) getSets(blockLength int) (sets0, sets1, sets2 []xorset) {
 	} else {
 		// zero out prior storage
 		for i := 0; i < tot; i++ {
-			bld.setStore[i].xormask = 0
-			bld.setStore[i].count = 0
+			bld.setStore[i] = xorset{}
 		}
 	}
 	sets0 = bld.setStore[:blockLength]
@@ -237,12 +237,11 @@ func (bld *Builder) populateCommon(keys []uint64, filter *XorFilterCommon) (stac
 	for {
 		iterations += 1
 		if iterations > MaxIterations {
-			return nil, errors.New("too many iterations, you probably have duplicate keys")
+			return nil, ErrTooManyIterations
 		}
 
 		for i := 0; i < size; i++ {
-			key := keys[i]
-			hs := filter.geth0h1h2(key)
+			hs := filter.geth0h1h2(keys[i])
 			sets0[hs.h0].xormask ^= hs.h
 			sets0[hs.h0].count++
 			sets1[hs.h1].xormask ^= hs.h
@@ -270,14 +269,15 @@ func (bld *Builder) populateCommon(keys []uint64, filter *XorFilterCommon) (stac
 				h2 := filter.geth2(hash)
 				stack[stacksize] = keyindexvar
 				stacksize++
-				sets1[h1].xormask ^= hash
 
+				sets1[h1].xormask ^= hash
 				sets1[h1].count--
 				if sets1[h1].count == 1 {
 					Q1[Q1size].index = h1
 					Q1[Q1size].hash = sets1[h1].xormask
 					Q1size++
 				}
+
 				sets2[h2].xormask ^= hash
 				sets2[h2].count--
 				if sets2[h2].count == 1 {
@@ -299,6 +299,7 @@ func (bld *Builder) populateCommon(keys []uint64, filter *XorFilterCommon) (stac
 				keyindexvar.index += filter.BlockLength
 				stack[stacksize] = keyindexvar
 				stacksize++
+
 				sets0[h0].xormask ^= hash
 				sets0[h0].count--
 				if sets0[h0].count == 1 {
@@ -306,6 +307,7 @@ func (bld *Builder) populateCommon(keys []uint64, filter *XorFilterCommon) (stac
 					Q0[Q0size].hash = sets0[h0].xormask
 					Q0size++
 				}
+
 				sets2[h2].xormask ^= hash
 				sets2[h2].count--
 				if sets2[h2].count == 1 {
@@ -325,9 +327,9 @@ func (bld *Builder) populateCommon(keys []uint64, filter *XorFilterCommon) (stac
 				h0 := filter.geth0(hash)
 				h1 := filter.geth1(hash)
 				keyindexvar.index += 2 * filter.BlockLength
-
 				stack[stacksize] = keyindexvar
 				stacksize++
+
 				sets0[h0].xormask ^= hash
 				sets0[h0].count--
 				if sets0[h0].count == 1 {
@@ -335,6 +337,7 @@ func (bld *Builder) populateCommon(keys []uint64, filter *XorFilterCommon) (stac
 					Q0[Q0size].hash = sets0[h0].xormask
 					Q0size++
 				}
+
 				sets1[h1].xormask ^= hash
 				sets1[h1].count--
 				if sets1[h1].count == 1 {
@@ -342,7 +345,6 @@ func (bld *Builder) populateCommon(keys []uint64, filter *XorFilterCommon) (stac
 					Q1[Q1size].hash = sets1[h1].xormask
 					Q1size++
 				}
-
 			}
 		}
 
